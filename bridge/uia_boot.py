@@ -1003,6 +1003,17 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
             return {"ok": True, "reason": "widened", "hwnd": hwnd, "pid": pid,
                     "version": version, "tree": state}
 
+    # 控件树会随界面重排短暂地退化成空壳（实测同一窗口宽度 636/1000 是 ok、
+    # 760/860 反而是 shell）。所以先给它一点时间自己恢复，别急着按热键 ——
+    # 热键是开关式的，按下去会把微信藏回托盘、把已经物化好的树又拆掉。
+    for attempt in range(4):
+        if attempt:
+            time.sleep(1.0)
+        state = tree_state(hwnd, timeout=1.0)
+        if state == "ok":
+            return {"ok": True, "reason": "recovered", "hwnd": hwnd, "pid": pid,
+                    "version": version, "tree": state}
+
     # 4.2 上最常见的情形：窗口缩在托盘里，UI 子树被销毁 → 先让它正常打开一次
     if restore_wechat(win, log=log):
         # restore 内部 win.update(w2) 可能已经换到新窗口（H6）：返回值必须从
