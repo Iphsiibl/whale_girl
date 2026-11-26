@@ -57,6 +57,16 @@ class SenderMixin:
         else:
             keys = [chat_display_name]
         t0 = clock()
+        # 摆窗口：配置成 offscreen 时先把微信挪到可见区域外，通道恢复它时就不会
+        # 冒到用户屏幕上（窗口仍 visible，通道照样能点）。
+        try:
+            self.apply_window_position(hwnd)
+        except Exception as e:
+            G.log('摆微信窗口位置失败：', repr(e))
+        # 后台通道要把最小化的微信「显示但不激活」拉出来才能点会话行/发送按钮
+        # （微信最小化时 UIA 能读，但合成鼠标消息不生效）。发完必须还原，
+        # 否则微信会一直摊在桌面上，用户每回一条消息都得再手动最小化。
+        win_snap = self.snapshot_win_state(hwnd)
         try:
             ok, why = bg_sender.send(text, chat=keys, hwnd=hwnd, log=G.log,
                                      char_gap=G.BG_SEND.get('charGap', 0.04),
@@ -67,6 +77,11 @@ class SenderMixin:
         except Exception as e:
             ok, why = (False, 'exception:' + type(e).__name__)
             G.log_warn('后台通道异常：', repr(e))
+        finally:
+            try:
+                self.restore_bg_window_state(win_snap)
+            except Exception as e:
+                G.log('后台通道还原窗口状态失败：', repr(e))
         self.BG_STATS['tried'] += 1
         self.BG_STATS['last'] = why
         self.BG_STATS['lastAt'] = G.time.time()
@@ -1105,12 +1120,22 @@ class SenderMixin:
         # 现在不管调用方是谁，都先换成昵称/备注；换不出来就放弃，别让 open_chat 空转。
         resolved = self.ui_chat_name(chat_username, chat_display_name)
         if not resolved:
+            # 群在本地库里还没有名字时（微信同步慢，或这个群压根没起名），
+            # 微信界面里显示的是「成员甲、成员乙」这样的成员名串 —— 那也是能搜到的
+            # 名字，用它当目标，别在这里就把生成好的回复丢掉。
+            resolved = self.group_target_name(chat_username, chat_display_name)
+            if resolved:
+                G.log('[delivery] stage=resolve_target result=fallback reason=group_members_title chat=%s'
+                      % G.safe_id(chat_username or chat_display_name))
+        if not resolved:
             G.log('[delivery] stage=resolve_target result=failed reason=chat_name_unresolved chat=%s' % G.safe_id(chat_username or chat_display_name))
-            hint = ('请为该群设置可搜索的群名或群备注'
-                    if str(chat_username or chat_display_name).lower().endswith('@chatroom')
-                    else '请为该联系人设置可搜索的备注')
+            if str(chat_username or chat_display_name).lower().endswith('@chatroom'):
+                hint = ('请在微信里给这个群起个名（或设群备注）；改完还要等微信把名字'
+                        '同步进本地数据库（重启微信最快），桥接会每 10 分钟自动重试')
+            else:
+                hint = '请在微信里给这个联系人设置可搜索的备注，备注同步进本地数据库后桥接会自动重试'
             G.log_throttled('send-no-name-' + str(chat_username or chat_display_name)[:18],
-                            '发送跳过：%s 没有可核对的会话名称，%s后重试'
+                            '发送跳过：%s 没有可核对的会话名称，%s'
                             % (G.safe_id(chat_username or chat_display_name), hint),
                             ttl=600)
             return False
@@ -1355,6 +1380,8 @@ class SenderMixin:
             return False
         # 和 send_text 同一道闸：群名/成员名可能是 wxid，@ 的时候同样搜不到。
         chat_display_name = self.ui_chat_name(chat_username, chat_display_name)
+        if not chat_display_name:
+            chat_display_name = self.group_target_name(chat_username, chat_display_name)
         if not chat_display_name:
             return False
         if chat_username and (self.chat_paused(chat_username) or not self.group_is_alive(chat_username)):

@@ -335,6 +335,8 @@ const DEFAULT_CONFIG = {
       fallbackToForeground: true,
       stripUnencodable: true,
       unhideWindow: true,
+      // 微信窗口摆哪：normal = 跟着用户；offscreen = 整个挪到可见区域外
+      windowPosition: 'normal',
       // WM_CHAR 编码：auto = 按微信版本自动（4.2+ 用 UTF-16 码元，老版本用 GBK 字节）
       charMode: 'auto',
     },

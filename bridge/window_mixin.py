@@ -5,6 +5,135 @@ import engine as G
 
 class WindowMixin:
 
+    # ── 微信窗口摆哪（wechat.bgSend.windowPosition）────────────────────
+    #: 摆到屏幕外时，窗口右边离屏幕左边留多少像素（免得贴边被系统拉回来）
+    OFFSCREEN_GAP = 120
+
+    def window_position_pref(self):
+        """微信窗口摆哪：normal（跟着用户）/ offscreen（整个挪出可见区域）。"""
+        try:
+            pref = str(G.BG_SEND.get('windowPosition') or 'normal').strip().lower()
+        except Exception:
+            pref = 'normal'
+        return 'offscreen' if pref == 'offscreen' else 'normal'
+
+    def _window_state_path(self):
+        return G.os.path.join(G.ROOT, 'data', 'wechat-window.json')
+
+    def _read_window_state(self):
+        try:
+            with open(self._window_state_path(), 'r', encoding='utf-8') as f:
+                data = G.json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_window_state(self, data):
+        try:
+            path = self._window_state_path()
+            G.os.makedirs(G.os.path.dirname(path), exist_ok=True)
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                G.json.dump(data, f, ensure_ascii=False)
+            G.os.replace(tmp, path)
+        except Exception as e:
+            G.log('写窗口位置状态失败：', repr(e))
+
+    def _window_normal_rect(self, hwnd):
+        """窗口「恢复后」该在的位置和大小（最小化时 GetWindowRect 是退化值）。"""
+        try:
+            import win32gui
+            if win32gui.IsIconic(hwnd):
+                l, t, r, b = win32gui.GetWindowPlacement(hwnd)[4]
+            else:
+                l, t, r, b = win32gui.GetWindowRect(hwnd)
+            return (int(l), int(t), max(240, int(r - l)), max(240, int(b - t)))
+        except Exception:
+            return None
+
+    def _window_is_offscreen(self, hwnd):
+        """窗口是不是整个都在可见区域外。"""
+        try:
+            import win32api
+            import win32con
+            import win32gui
+            l, t, r, b = win32gui.GetWindowRect(hwnd)
+            vx = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
+            vy = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
+            vw = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
+            vh = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
+            return not (l < vx + vw and r > vx and t < vy + vh and b > vy)
+        except Exception:
+            return False
+
+    def _move_window(self, hwnd, x, y, w, h):
+        """挪窗口，但不激活它（SWP_NOACTIVATE），也不抢前台。"""
+        try:
+            import win32con
+            import win32gui
+            placement = list(win32gui.GetWindowPlacement(hwnd))
+            placement[4] = (int(x), int(y), int(x + w), int(y + h))
+            win32gui.SetWindowPlacement(hwnd, placement)
+            if not win32gui.IsIconic(hwnd):
+                win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, int(x), int(y), int(w), int(h),
+                                      win32con.SWP_NOACTIVATE)
+            return True
+        except Exception as e:
+            G.log('挪微信窗口失败：', repr(e))
+            return False
+
+    def apply_window_position(self, hwnd=0):
+        """按配置摆微信窗口：offscreen → 整个挪出可见区域；normal → 回到屏幕里。
+
+        为什么需要：后台通道点会话行/点发送按钮靠的是发给窗口的合成鼠标消息，
+        而微信最小化时**任何写操作都不生效**（合成鼠标消息不生效、Invoke 也不生效，
+        实测过），所以通道只能先把窗口恢复出来 —— 于是它会在你屏幕上冒 3~4 秒。
+        把窗口一直摆在可见区域外，这条路就完全没有动静：窗口仍然 visible 且不
+        minimized，通道照样能点。
+
+        摆到屏幕外时把原来的位置记下来，改回 normal 再挪回去。
+        """
+        pref = self.window_position_pref()
+        try:
+            import win32gui
+        except Exception:
+            return False
+        hwnd = int(hwnd or 0) or int(self.ACCOUNT.get('hwnd') or 0) or self.find_weixin_hwnd()
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return False
+        state = self._read_window_state()
+        try:
+            if pref == 'offscreen':
+                if self._window_is_offscreen(hwnd):
+                    return True
+                restore = self._window_normal_rect(hwnd)
+                if not restore:
+                    return False
+                x, y, w, h = restore
+                if not self._move_window(hwnd, -w - self.OFFSCREEN_GAP, y, w, h):
+                    return False
+                state['position'] = 'offscreen'
+                state['restore'] = [int(v) for v in restore]
+                self._write_window_state(state)
+                G.log('微信窗口已挪到可见区域外（后台回复不再占用屏幕）')
+                return True
+            if not self._window_is_offscreen(hwnd):
+                return True
+            restore = state.get('restore') or []
+            if len(restore) == 4:
+                x, y, w, h = [int(v) for v in restore]
+            else:
+                x, y, w, h = 60, 60, 1000, 700
+            if not self._move_window(hwnd, x, y, w, h):
+                return False
+            state['position'] = 'normal'
+            self._write_window_state(state)
+            G.log('微信窗口已挪回屏幕内')
+            return True
+        except Exception as e:
+            G.log('摆微信窗口位置失败：', repr(e))
+            return False
+
     def foreground_is_moments(self):
         # 仅查询原生窗口类，不遍历 UIA；朋友圈切页时控件树可能正被销毁。
         try:
@@ -317,15 +446,16 @@ class WindowMixin:
             G.log('手动回车失败：', repr(e))
             return False
 
-    def snapshot_win_state(self):
+    def snapshot_win_state(self, hwnd=0):
         """记下发送前的「窗口长什么样」，发完要还原。
 
         要还原的东西：微信是不是最小化、原来哪个窗口在前台。
+        `hwnd` 可以显式指定，避免和实际发送用的窗口不一致。
         """
         snap = {'hwnd': 0, 'iconic': False, 'fg': 0}
         try:
             import win32gui
-            snap['hwnd'] = int(self.ACCOUNT.get('hwnd') or 0) or self.find_weixin_hwnd() or 0
+            snap['hwnd'] = int(hwnd or 0) or int(self.ACCOUNT.get('hwnd') or 0) or self.find_weixin_hwnd() or 0
             if snap['hwnd']:
                 snap['iconic'] = bool(win32gui.IsIconic(snap['hwnd']))
             snap['fg'] = win32gui.GetForegroundWindow() or 0
@@ -378,6 +508,44 @@ class WindowMixin:
             G.log_window_problem('还原前台失败（窗口已最小化，不影响使用）', None)
         except Exception as e:
             G.log_window_problem('还原窗口状态失败', e)
+
+    def restore_bg_window_state(self, snap):
+        """后台发送结束后还原窗口状态。
+
+        后台通道为了能点会话行/发送按钮，会把最小化的微信「显示但不激活」拉出来
+        （微信最小化时 UIA 能读控件，但写操作一律无效：合成鼠标消息不生效、
+        Invoke 也不生效 —— 实测过）。发完必须还原，否则微信会一直摊在桌面上，
+        用户每回一条消息都得再手动最小化。
+
+        只做「重新最小化」这一件事：**不碰键盘**。实测把微信最小化，Windows 会
+        自动把前台还给之前那个程序，所以不需要 SetForegroundWindow，也就不需要
+        那套 ALT 解锁（它会往用户正在用的程序里塞一个真实的 Alt 按键）。
+        只有微信仍占着前台时才退回带 ALT 的老路。
+        """
+        if not snap:
+            return
+        try:
+            import win32gui
+            import win32con
+            wx = snap.get('hwnd')
+            if wx and snap.get('iconic') and win32gui.IsWindow(wx):
+                win32gui.ShowWindow(wx, win32con.SW_MINIMIZE)
+                G.time.sleep(0.12)
+        except Exception:
+            pass
+        try:
+            import win32gui
+            fg = snap.get('fg')
+            if not fg or not win32gui.IsWindow(fg):
+                return
+            if win32gui.GetForegroundWindow() == fg:
+                return
+            if win32gui.GetForegroundWindow() != (snap.get('hwnd') or 0):
+                return
+            # 微信还占着前台（极少发生）：才用带 ALT 解锁的老路把它还回去
+            self.restore_win_state(snap)
+        except Exception:
+            pass
 
     def install_quiet_uia(self, u):
         """让 UIA 引擎「别抢前台」。

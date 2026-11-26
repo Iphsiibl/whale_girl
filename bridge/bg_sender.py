@@ -503,18 +503,36 @@ def tree_hint(nodes):
 
 # ---------------------------------------------------------------- 发送端（文档 §5.1）
 def _click_point_on_window(hwnd, xy):
-    """最小化时 UIA 可能保留旧矩形。只使用落在实际窗口和某块屏幕内的点。"""
+    """点击点必须落在窗口**当前**的矩形里。
+
+    最小化时 UIA 可能保留旧矩形：这时窗口矩形是退化值（-32000 那一片），
+    点自然落不进去 → 直接拒掉，不会点到别处去。
+
+    窗口被放到屏幕外、或者待在另一个虚拟桌面上时，点在窗口矩形内就够了：
+    点击会先用 ScreenToClient 转成**客户区**坐标再投递给窗口（见 click_screen），
+    真实鼠标位置在哪根本不影响，所以不能拿「点是否在某块屏幕上」当条件 ——
+    那样窗口一挪出屏幕就发不出去了。
+    """
     if xy is None:
         return False
     try:
         import win32api
+        import win32con
         import win32gui
         if win32gui.IsIconic(hwnd) or not win32gui.IsWindowVisible(hwnd):
             return False
         x, y = xy
         left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        return (left <= x < right and top <= y < bottom
-                and bool(win32api.MonitorFromPoint((x, y), 0)))
+        if not (left <= x < right and top <= y < bottom):
+            return False
+        # 窗口和屏幕有交集时，才额外要求点也在某块屏幕上（防呆）
+        vx = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
+        vy = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
+        vw = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
+        vh = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
+        if (left < vx + vw and right > vx and top < vy + vh and bottom > vy):
+            return bool(win32api.MonitorFromPoint((x, y), 0))
+        return True
     except Exception:
         return False
 

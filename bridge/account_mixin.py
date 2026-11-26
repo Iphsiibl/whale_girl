@@ -10,6 +10,9 @@ _RAW_CHAT_ID_RE = re.compile(r'^(?:wxid_[A-Za-z0-9_-]+|[A-Za-z0-9_-]+@chatroom)$
 # 账号目录名比真 wxid 多一段 4 位哈希（wxid_xxx_c248），两者指同一个账号。
 _ACCOUNT_HASH_RE = re.compile(r'_[0-9a-f]{4}$', re.I)
 
+#: 昵称缓存的存活时间（秒）。改名/同步之后最多等这么久，名字就会更新。
+NAME_CACHE_TTL = 300.0
+
 
 def is_raw_chat_id(text):
     """这串是不是微信内部 id（wxid_xxx / xxx@chatroom），而不是能搜索的昵称。"""
@@ -92,8 +95,15 @@ class AccountMixin:
         return ''
 
     def display_name(self, username):
-        if username in self.name_cache:
-            return self.name_cache[username]
+        # 名字缓存带 TTL：群里改名后微信要过一阵才同步进本地库，缓存不能把旧名
+        # 一直钉住（钉住了就一直对着旧名字找会话，回复自然发不出去）。
+        hit = self.name_cache.get(username)
+        if isinstance(hit, tuple):
+            name, ts = hit
+            if G.time.time() - ts < NAME_CACHE_TTL:
+                return name
+        elif hit:
+            return hit
         name = ''
         ok = False
         try:
@@ -114,24 +124,114 @@ class AccountMixin:
             name = ''
         name = name or username
         if ok and name != username:
-            self.name_cache[username] = name
+            self.name_cache[username] = (name, G.time.time())
         return name
+
+    def _group_member_rows(self, username):
+        """群成员按**微信里的排列顺序**：[(username, nick_name, remark), ...]。
+
+        上游 get_group_members() 按 username 排序，和微信界面里的顺序不一样；
+        微信 4.x 给无名群拼的标题是按这个顺序来的，所以这里直接查
+        chatroom_member 的行顺序。查不到就退回 get_group_members（顺序不保证准）。
+        """
+        rows = []
+        conn = None
+        try:
+            conn = self.db._contact_conn()
+        except Exception:
+            conn = None
+        if conn is not None:
+            try:
+                cur = conn.execute(
+                    "SELECT c.username, c.nick_name, c.remark FROM chatroom_member m "
+                    "LEFT JOIN contact c ON c.id = m.member_id "
+                    "WHERE m.room_id = (SELECT id FROM chat_room WHERE username = ?) "
+                    "ORDER BY m.rowid", (username,))
+                rows = [(str(r[0] or ''), str(r[1] or ''), str(r[2] or '')) for r in cur.fetchall()]
+            except Exception:
+                rows = []
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        if not rows:
+            try:
+                for m in self.db.get_group_members(username) or []:
+                    rows.append((str(m.get('username') or ''),
+                                 str(m.get('nick_name') or ''),
+                                 str(m.get('remark') or '')))
+            except Exception:
+                rows = []
+        return rows
+
+    def group_member_titles(self, username):
+        """无名群在微信界面里显示的那一串名字。
+
+        微信 4.x 给没起名字的群起的标题，是**成员昵称**按群里的排列顺序用「、」
+        连起来，而且**不含自己**。实测 4.2.1.9：无名群在会话列表里的行名就是
+        这一串（成员进出会跟着变）。备注那一版也一并给出：不同的账号下微信可能
+        显示备注而不是昵称。
+
+        返回 [昵称串, 备注串]（两者相同时只给一个）；取不到返回 []。
+        """
+        if not username or not str(username).endswith('@chatroom'):
+            return []
+        rows = self._group_member_rows(username)
+        if not rows:
+            return []
+        me = str(getattr(self, 'me', '') or '').strip()
+        nicks, remarks = [], []
+        for u, nick, remark in rows:
+            if not u or (me and u == me):
+                continue
+            nicks.append(nick or remark or u)
+            remarks.append(remark or nick or u)
+        out = []
+        for parts in (nicks, remarks):
+            joined = '、'.join(p for p in parts if p)
+            if joined and joined not in out:
+                out.append(joined)
+        return out
+
+    def group_target_name(self, username, shown=''):
+        """无名群也能定位到的目标名；定位不到返回空串。
+
+        微信界面里没起名字的群显示的是成员名串，那个串在微信里搜得到，
+        所以本地库里没有群名时用它顶上，而不是把这条回复直接丢掉。
+        """
+        if not username or not str(username).endswith('@chatroom'):
+            return ''
+        try:
+            cands = self.aliases_for(username, shown)
+        except Exception:
+            return ''
+        for c in cands or []:
+            if c and not is_raw_chat_id(c):
+                return c
+        return ''
 
     def aliases_for(self, username, shown=''):
         """会话列表里那一行可能叫什么（微信里没命名的群，显示的是成员名）。
 
-        实测：群 00000000000@chatroom 在数据库里 nick_name 是空的，会话列表里显示
-        「成员甲、成员乙『示例群』」—— 按群名/open_chat 都匹配不上，所以这里把
-        「成员名用、连起来」也当候选名。
+        实测（微信 4.2.1.9）：无名群在会话列表里显示的是**成员昵称**按群里的
+        排列顺序用「、」连起来的一串，而且不含自己。以前这里按备注、按 username
+        排序拼，拼出来的那串和微信界面对不上；发送通道是按精确行名匹配的，
+        于是永远找不到这个群（chat_not_found），回复就丢了。
+
+        成员会进进出出、微信标题跟着变，所以群这一段每次重算、不进缓存。
         """
+        is_group = bool(username) and str(username).endswith('@chatroom')
         key = (username or '', shown or '')
-        if key in self.alias_cache:
-            return self.alias_cache[key]
+        if not is_group:
+            cached = self.alias_cache.get(key)
+            if cached:
+                return list(cached)
         out = []
         partial = False
         if shown and shown != username and (not str(shown).endswith('@chatroom')):
             out.append(shown)
-        if username and str(username).endswith('@chatroom'):
+        if is_group:
             try:
                 nm = str(self.db.group_id_to_name(username) or '').strip()
             except Exception:
@@ -139,23 +239,14 @@ class AccountMixin:
                 partial = True
             if nm and nm != username:
                 out.append(nm)
-            try:
-                nicks = []
-                for m in self.db.get_group_members(username) or []:
-                    if m.get('username') == self.me:
-                        continue
-                    n = (m.get('remark') or '').strip() or (m.get('nick_name') or '').strip()
-                    if n:
-                        nicks.append(n)
-                if nicks:
-                    out.append('、'.join(nicks))
-            except Exception:
-                partial = True
+            for title in self.group_member_titles(username):
+                if title and title not in out:
+                    out.append(title)
         if not out:
             out.append(shown or username)
         # wxid / 群 id 在微信里搜不到；装进候选里只会让 open_chat 白搜一轮。
         out = [x for x in dict.fromkeys(out) if x and not is_raw_chat_id(x)]
-        if not partial and out:
+        if not is_group and not partial and out:
             self.alias_cache[key] = out
         return out
 

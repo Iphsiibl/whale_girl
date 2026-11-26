@@ -176,6 +176,9 @@ const FIELDS = {
   'wechat.bgSend.fallbackToForeground': { type: 'bool' },
   'wechat.bgSend.stripUnencodable': { type: 'bool' },
   'wechat.bgSend.unhideWindow': { type: 'bool' },
+  // 微信窗口摆哪：normal = 跟着用户；offscreen = 整个挪到可见区域外，
+  // 后台回复时它就不会再冒到屏幕上（窗口仍 visible，通道照样能点）。
+  'wechat.bgSend.windowPosition': { type: 'enum', values: ['normal', 'offscreen'] },
   'wechat.pipelineWorkers': { type: 'int', min: 1, max: 16 },
   'wechat.pipelineQueueLimit': { type: 'int', min: 1, max: 32 },
 };

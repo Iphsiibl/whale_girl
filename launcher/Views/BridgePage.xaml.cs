@@ -455,6 +455,7 @@ namespace WhaleLauncher.Views
                     ChkUnhide.IsChecked = JsonRead.Bool(bg, "unhideWindow");
                     ChkVerify.IsChecked = JsonRead.Bool(bg, "verify");
                     ChkStrip.IsChecked = JsonRead.Bool(bg, "stripUnencodable");
+                    UpdateWindowPosButton(JsonRead.Str(bg, "windowPosition") == "offscreen");
                 }
                 if (!TxtCharGap.IsKeyboardFocusWithin) TxtCharGap.Text = charGap.ToString();
                 CmbCharMode.Items.Clear();
@@ -626,6 +627,35 @@ namespace WhaleLauncher.Views
                         ["unhideWindow"] = ChkUnhide.IsChecked == true,
                         ["verify"] = ChkVerify.IsChecked == true,
                         ["stripUnencodable"] = ChkStrip.IsChecked == true
+                    }
+                }
+            });
+        }
+
+        // ── 微信窗口摆哪（wechat.bgSend.windowPosition）────
+        // 后台通道点会话/点发送靠的是发给窗口的合成鼠标消息，微信最小化时不生效，
+        // 所以通道每次都要把窗口恢复出来 —— 会在用户屏幕上冒 3~4 秒。
+        // 摆到可见区域外就彻底没有动静（窗口仍 visible，通道照样能点）。
+        private bool _windowPosOffscreen;
+
+        private void UpdateWindowPosButton(bool offscreen)
+        {
+            _windowPosOffscreen = offscreen;
+            BtnWindowPos.Content = offscreen ? "把微信窗口拉回屏幕" : "把微信窗口挪到屏幕外";
+        }
+
+        private async void OnToggleWindowPos(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            var next = _windowPosOffscreen ? "normal" : "offscreen";
+            UpdateWindowPosButton(next == "offscreen");
+            await PatchAsync(new Dictionary<string, object>
+            {
+                ["wechat"] = new Dictionary<string, object>
+                {
+                    ["bgSend"] = new Dictionary<string, object>
+                    {
+                        ["windowPosition"] = next
                     }
                 }
             });

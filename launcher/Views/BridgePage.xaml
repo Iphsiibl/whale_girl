@@ -156,6 +156,9 @@
                     <CheckBox x:Name="ChkUnhide" Content="托盘时自动开窗" FontSize="12" Click="OnSaveSendOpt" />
                     <CheckBox x:Name="ChkVerify" Content="发送后回读确认" FontSize="12" Margin="18,0,0,0" Click="OnSaveSendOpt" />
                     <CheckBox x:Name="ChkStrip" Content="跳过 GBK 编不了的字符" FontSize="12" Margin="18,0,0,0" Click="OnSaveSendOpt" />
+                    <Button x:Name="BtnWindowPos" Style="{StaticResource Ghost}" Margin="18,0,0,0"
+                            Click="OnToggleWindowPos"
+                            ToolTip="微信窗口挪到可见区域外：后台回复时它就不会再冒到屏幕上（窗口仍可被后台通道操作）。再点一次拉回屏幕内。" />
                 </WrapPanel>
                 <TextBlock x:Name="CharModeHint" Style="{StaticResource Small}" Margin="0,6,0,0"
                            Text="中文发出去变乱码时改「编码」：微信 4.1 及以前选 GBK，4.2+ 选 UTF-16；「自动」靠版本号判断，认不出时不会自己换。" />

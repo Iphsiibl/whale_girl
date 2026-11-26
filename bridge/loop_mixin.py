@@ -68,6 +68,9 @@ class LoopMixin:
                 continue
             name = self.ui_chat_name(u, name)
             if not name:
+                # 无名群在微信界面里显示的是成员名串，用它也能定位到会话。
+                name = self.group_target_name(u, name)
+            if not name:
                 # 读不到昵称就别去搜 —— 用 wxid 搜会话是纯粹的十几秒空转。
                 G.log_throttled('care-no-name-' + u[:18], '主动搭话没发：%s 在本地数据库里没有昵称/备注，微信搜不到这个会话（先给 TA 加个备注再试）' % G.safe_id(u), ttl=3600)
                 continue
@@ -337,6 +340,12 @@ class LoopMixin:
         background_uia_paused = False
         while True:
             try:
+                # 摆窗口（配置成 offscreen 时）：用户点了按钮不用等下一次回复才生效，
+                # 微信重启后窗口回到屏幕内也会被重新挪出去。
+                try:
+                    self.apply_window_position()
+                except Exception:
+                    pass
                 resting = False
                 uia_now = None
                 if self.foreground_is_moments():
