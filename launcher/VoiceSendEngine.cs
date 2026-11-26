@@ -62,8 +62,24 @@ public static class VoiceSendEngine
   if(!found)throw new Exception("微信的发语音快捷键与配置不一致，请在两边设置为 "+shortcut.Label);
   return new Target(h,chat);
  }
- static void Check(Target t){if(GetForegroundWindow()!=t.Hwnd||Chat(t.Hwnd)!=t.Chat)throw new Exception("窗口或会话已变化，取消本次录音");}
- public static async Task Play(string file,string deviceId,Target target,CancellationToken ct,string recordingHotkey="Ctrl+Alt"){
+ static void Check(Target t,bool strict=true){
+  // strict=false：后台录音模式。用户切到别的程序时不再中止录音 ——
+  // 只要会话没变就继续录，这样鲸鲸说话时你还能接着干自己的事。
+  // 会话真的变了（用户自己在微信里切了聊天）仍然中止。
+  if(strict){if(GetForegroundWindow()!=t.Hwnd)throw new Exception("窗口或会话已变化，取消本次录音");}
+  try{if(Chat(t.Hwnd)!=t.Chat)throw new Exception("窗口或会话已变化，取消本次录音");}
+  catch(Exception e)when(!strict&&e.Message.Contains("无法确认当前微信会话")){/* 后台读不到控件树时不打断录音 */}
+ }
+ // 把「按键抬起」直接补发给微信：录音期间用户切走了，SendInput 的 key-up
+ // 就送到了别的程序，微信那边按键还按着 → 录音停不下来、也发不出去。
+ static void KeyUpTo(IntPtr hwnd,ushort vk){
+  uint scan=0,extended=0;
+  if(vk==0x11){scan=0x1D;extended=1;}
+  else if(vk==0x12){scan=0x38;extended=1;}
+  var lp=(IntPtr)(1|(scan<<16)|(extended<<24)|(1u<<30)|(1u<<29));
+  SendMessageTimeout(hwnd,0x101,(IntPtr)vk,lp,2,300,out _);
+ }
+ public static async Task Play(string file,string deviceId,Target target,CancellationToken ct,string recordingHotkey="Ctrl+Alt",bool keepWhenUnfocused=false){
   var shortcut=RecordingShortcut.Parse(recordingHotkey);var held=new List<ushort>();
   ValidateWave(file);using var e=new MMDeviceEnumerator();using var d=e.GetDevice(deviceId);if(d.State!=DeviceState.Active||d.DataFlow!=DataFlow.Render)throw new Exception("所选声卡不可用");
   using var reader=new AudioFileReader(file);using var output=new WasapiOut(d,AudioClientShareMode.Shared,true,100);output.Init(reader);Exception error=null;output.PlaybackStopped+=(_,a)=>error=a.Exception;
@@ -78,7 +94,7 @@ public static class VoiceSendEngine
     foreach(var k in shortcut.Keys){ct.ThrowIfCancellationRequested();held.Add(k);Key(k,false);}
     await Task.Delay(500,ct);
    }
-   var end=DateTime.UtcNow.AddSeconds(reader.TotalTime.TotalSeconds+10);output.Play();while(output.PlaybackState==PlaybackState.Playing){ct.ThrowIfCancellationRequested();if(DateTime.UtcNow>end)throw new Exception("音频设备播放超时");if(target!=null)Check(target);await Task.Delay(80,ct);}if(error!=null)throw new Exception("播放失败",error);await Task.Delay(350,ct);if(target!=null)Check(target);done=true;
+   var end=DateTime.UtcNow.AddSeconds(reader.TotalTime.TotalSeconds+10);output.Play();while(output.PlaybackState==PlaybackState.Playing){ct.ThrowIfCancellationRequested();if(DateTime.UtcNow>end)throw new Exception("音频设备播放超时");if(target!=null)Check(target,!keepWhenUnfocused);await Task.Delay(80,ct);}if(error!=null)throw new Exception("播放失败",error);await Task.Delay(350,ct);if(target!=null)Check(target,!keepWhenUnfocused);done=true;
   }finally
   {
    try{output.Stop();}
@@ -89,6 +105,9 @@ public static class VoiceSendEngine
      if(!done)SendMessageTimeout(target.Hwnd,0x100,(IntPtr)0x1B,IntPtr.Zero,2,300,out _);
      Exception releaseError=null;
      foreach(var k in held.AsEnumerable().Reverse()){try{Key(k,true);}catch(Exception ex){releaseError??=ex;}}
+     // 录音期间焦点跑到别的程序上了：把「按键抬起」也补发给微信，
+     // 否则微信那边还按着 Ctrl+Alt，录音停不下来、消息也发不出去。
+     if(target!=null&&GetForegroundWindow()!=target.Hwnd)foreach(var k in held.AsEnumerable().Reverse())KeyUpTo(target.Hwnd,k);
      if(releaseError!=null)throw releaseError;
     }
    }

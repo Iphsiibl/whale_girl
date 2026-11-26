@@ -349,6 +349,55 @@ def tree_state(hwnd: int, timeout: float = 1.0, max_nodes: int = 1200, *, accoun
     return "shell"
 
 
+# 微信窗口太窄时会把左侧会话列表整个收起来（改成图标条），
+# 于是控件树里找不到 mmui::ChatSessionList / mmui::XTableView，
+# tree_state 判成「空壳」。实测（2026-11-26）：窗口 439x451 时是空壳，
+# 拉宽到 1000x700 后同一棵树上会话列表就出现了 —— 树本身一直是好的。
+MIN_SESSION_LIST_SIZE = (1000, 700)
+
+
+def widen_for_session_list(hwnd: int, log=None) -> bool:
+    """窗口太窄导致会话列表没渲染时，把它拉宽一点再让调用方重试。
+
+    为什么这一步排在「按热键把微信从托盘唤回来」前面：热键是开关式的，
+    反复按会把微信藏回托盘、顺手把已经物化好的控件树又拆掉。
+    拉宽窗口没有任何副作用，先做它。
+    """
+    def say(msg):
+        if callable(log):
+            try:
+                log(msg)
+            except Exception:
+                pass
+
+    if not hwnd:
+        return False
+    try:
+        import win32gui
+        import win32con
+    except Exception:
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            return False
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        return False
+    width, height = right - left, bottom - top
+    need_w, need_h = MIN_SESSION_LIST_SIZE
+    if width >= need_w and height >= need_h:
+        return False
+    try:
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, left, top,
+                              max(width, need_w), max(height, need_h),
+                              win32con.SWP_NOACTIVATE)
+    except Exception:
+        return False
+    say("UIA 自检：微信窗口太窄（%dx%d），会话列表没渲染，拉宽到 %dx%d" % (
+        width, height, max(width, need_w), max(height, need_h)))
+    return True
+
+
 def resolve_account_windows(candidates):
     """进程已确认归属后，用窗口级证据区分主窗与辅助窗。"""
     if len(candidates) > 6:
@@ -943,6 +992,16 @@ def ensure(prefer_hwnd: int = 0, log=None, max_candidates: int = 6,
         # 心跳/巡检只读状态，不能把微信窗口弹出来吓用户；真正发送时再唤醒。
         return {"ok": False, "reason": "asleep", "hwnd": hwnd, "pid": pid,
                 "version": version, "tree": state}
+
+    # 先试「窗口太窄 → 拉宽」：这一步没有副作用，而下面的热键恢复是开关式的，
+    # 反复按会把已经物化好的控件树又拆掉（实测 2026-11-26）。
+    if widen_for_session_list(hwnd, log=log):
+        time.sleep(1.2)
+        state = tree_state(hwnd, timeout=1.0)
+        if state == "ok":
+            say("UIA 自检：拉宽窗口后控件树就绪（会话列表已渲染）")
+            return {"ok": True, "reason": "widened", "hwnd": hwnd, "pid": pid,
+                    "version": version, "tree": state}
 
     # 4.2 上最常见的情形：窗口缩在托盘里，UI 子树被销毁 → 先让它正常打开一次
     if restore_wechat(win, log=log):

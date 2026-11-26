@@ -22,6 +22,9 @@ public sealed class AutoVoiceSettings
     public string Instructions { get; set; } = "";
     public string RecordingHotkey { get; set; } = "Ctrl+Alt";
     public double SynthTimeoutSec { get; set; } = 85;
+    // 后台录音：录音期间你切到别的程序也不中止（会话变了仍然中止）。
+    // 关着就是老行为 —— 焦点一变就取消这次录音。
+    public bool KeepRecordingWhenUnfocused { get; set; }
     public static AutoVoiceSettings Load(string root) => JsonSerializer.Deserialize<AutoVoiceSettings>(File.ReadAllText(Path.Combine(root,"data","voice-send.json")));
     public static bool IsEnabled(string root) { try { return Load(root)?.Enabled == true; } catch { return false; } }
     public static void CancelJobs(string root)
@@ -78,7 +81,7 @@ public static class AutoVoiceWorker
             if(target.Hwnd!=hwnd||target.Chat!=go.Chat)throw new Exception("目标窗口或会话校验失败");
             // From here on, failure is uncertain: never automatically send text again.
             recording=true;
-            await VoiceSendEngine.Play(audio,settings.Device,target,cancel.Token,shortcut.Label);
+            await VoiceSendEngine.Play(audio,settings.Device,target,cancel.Token,shortcut.Label,settings.KeepRecordingWhenUnfocused);
             File.WriteAllText(path+".result",JsonSerializer.Serialize(new {Status="sent_unconfirmed",metrics.RequestMs,metrics.HeadersMs,metrics.HttpStatus}));
             return 0;
         }
