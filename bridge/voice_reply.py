@@ -97,6 +97,15 @@ def choose(config, incoming, is_group, rng, log=None):
     selected = rng() < chance / 100
     return decision(selected, 'probability_hit' if selected else 'probability_miss')
 
+def focus_lost_error(error):
+    """这次失败是不是「你切走了窗口」造成的。
+
+    启动器录音时会在前台变化/会话变化时中止，并向微信发 ESC 取消录音 ——
+    所以这种情况**微信一条都没发出去**，重试是安全的（不会变成两条语音）。
+    """
+    text = str(error or "")
+    return "窗口或会话已变化" in text
+
 def deliver(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=None, outcome=None, send_lock=None):
     """Synthesize first; only touch WeChat once the worker reports ready.
 
@@ -118,6 +127,32 @@ def deliver(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=Non
         if outcome is not None:
             outcome.update(Status="failed", Error="语音接口连续异常，暂时回退文字，5 分钟后自动再试")
         return False
+    # 录音期间你切了窗口 → 微信那条语音根本没发出去，重试一次不算重复发送。
+    last = None
+    for attempt in range(2):
+        ok, status, error = _deliver_once(root, text, hwnd, prepare, log, allow_foreground,
+                                          cancelled, outcome, send_lock)
+        last = (status, error)
+        if attempt == 0 and status == "uncertain" and focus_lost_error(error):
+            log("自动语音：录音时前台窗口变了（这条没发出去），重试一次")
+            time.sleep(1.5)
+            continue
+        if outcome is not None:
+            outcome.update(Status=status, Error=error)
+        return ok
+    if outcome is not None and last is not None:
+        outcome.update(Status=last[0], Error=last[1])
+    return True
+
+def _deliver_once(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=None, outcome=None, send_lock=None):
+    """跑一轮「合成 → 等通道 → 录音发送」。
+
+    返回 (可能已发送, 状态, 错误文案)。状态取自启动器工作进程的结果文件。
+    """
+    def check_cancelled():
+        if settings(root).get("Enabled") is not True or (cancelled is not None and cancelled()):
+            raise RuntimeError("语音测试已取消或实验开关已关闭")
+
     directory = os.path.join(root, "data", "voice-send-jobs")
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, uuid.uuid4().hex + ".json")
@@ -190,17 +225,17 @@ def deliver(root, text, hwnd, prepare, log, allow_foreground=None, cancelled=Non
             if outcome is not None:
                 outcome.update(Status=status, Error=str(result.get("Error", "")))
             log("自动语音：", status, result.get("Error", ""))
-            return status in ("sent_unconfirmed", "uncertain")
+            return status in ("sent_unconfirmed", "uncertain"), status, str(result.get("Error", ""))
         if outcome is not None:
             outcome.update(Status="uncertain" if released else "failed", Error="未收到语音工作进程结果")
-        return released  # no result after handing over: do not repeat uncertain sends
+        return released, ("uncertain" if released else "failed"), "未收到语音工作进程结果"
     except Exception as exc:
         if outcome is not None:
             outcome.update(Status="uncertain" if released else "failed", Error=str(exc))
         if stage == "合成" and isinstance(exc, TimeoutError):
             _health_update(root, True)
         log("自动语音未完成：阶段=%s 耗时=%.1fs 原因=%s" % (stage, time.monotonic() - started, str(exc)))
-        return released
+        return released, ("uncertain" if released else "failed"), str(exc)
     finally:
         if process is not None and process.poll() is None:
             # Give the worker a chance to cancel recording before it releases keys.

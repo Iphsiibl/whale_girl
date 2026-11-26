@@ -37,7 +37,14 @@ class VoiceMixin:
                 if current not in keys:
                     return ''
                 return current
-        return G.voice_reply.deliver(G.ROOT, text, hwnd, prepare, G.log, cancelled=cancelled, outcome=outcome, send_lock=self.send_lock)
+        # 录音必须让微信在前台，窗口就不能待在屏幕外：否则用户看不见微信，
+        # 敲的字却会掉进它的输入框。发完再挪回屏幕外。
+        shown = self.show_window_for_foreground(hwnd)
+        try:
+            return G.voice_reply.deliver(G.ROOT, text, hwnd, prepare, G.log, cancelled=cancelled, outcome=outcome, send_lock=self.send_lock)
+        finally:
+            if shown:
+                self.apply_window_position(hwnd)
 
     def voice_test_loop(self):
         while True:

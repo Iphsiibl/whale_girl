@@ -122,6 +122,10 @@ class WindowMixin:
                     return True
                 if not self._window_is_offscreen(hwnd):
                     state['restore'] = [int(v) for v in normal]
+                # 摆到屏幕外时至少留够宽度：微信窗口太窄会把左侧会话列表收起来，
+                # 控件树里就没有会话列表了（判成「空壳」，鲸鲸就切不了会话）。
+                w = max(int(w), 1000)
+                h = max(int(h), 700)
                 if not self._move_window(hwnd, -w - self.OFFSCREEN_GAP, y, w, h, restore=True):
                     return False
                 state['position'] = 'offscreen'
@@ -144,6 +148,39 @@ class WindowMixin:
         except Exception as e:
             G.log('摆微信窗口位置失败：', repr(e))
             return False
+
+    def show_window_for_foreground(self, hwnd=0):
+        """需要抢前台的路径（录音、表情包）之前，把屏幕外的微信窗口挪回屏幕内。
+
+        为什么必须挪回来：微信被抢到前台时如果整个在屏幕外，用户看不见它，
+        但键盘焦点确实在它身上 —— 用户此时敲的字会掉进微信的输入框，
+        甚至被当成消息发到群里。所以「屏幕外」只适用于不抢前台的通道。
+
+        返回 True 表示确实挪过，调用方结束后要把它挪回去。
+        """
+        try:
+            import win32gui
+        except Exception:
+            return False
+        if self.window_position_pref() != 'offscreen':
+            return False
+        hwnd = int(hwnd or 0) or int(self.ACCOUNT.get('hwnd') or 0) or self.find_weixin_hwnd()
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return False
+        if win32gui.IsIconic(hwnd) or not self._window_is_offscreen(hwnd):
+            return False
+        state = self._read_window_state()
+        restore = state.get('restore') or []
+        if len(restore) == 4:
+            x, y, w, h = [int(v) for v in restore]
+        else:
+            x, y, w, h = 60, 60, 1000, 700
+        if not self._move_window(hwnd, x, y, w, h, restore=True):
+            return False
+        state['position'] = 'normal'
+        self._write_window_state(state)
+        G.log('微信窗口已挪回屏幕内（这次要抢前台，得让你看得见）')
+        return True
 
     def foreground_is_moments(self):
         # 仅查询原生窗口类，不遍历 UIA；朋友圈切页时控件树可能正被销毁。

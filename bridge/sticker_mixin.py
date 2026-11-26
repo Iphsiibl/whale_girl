@@ -78,6 +78,9 @@ class StickerMixin:
                 return G.sticker_result('failed', 'target account window could not be verified')
             hwnd = int(self.ACCOUNT.get('hwnd') or 0)
             snap = None
+            # 表情包要操作微信的弹窗，必须抢前台；窗口在屏幕外时先挪回来，
+            # 否则用户看不见微信、敲的字却会掉进它的输入框。发完再挪回去。
+            shown = self.show_window_for_foreground(hwnd)
             try:
                 desktop = G.WindowsDesktop()
                 if not desktop.foreground(hwnd):
@@ -172,6 +175,11 @@ class StickerMixin:
                         # 用户切走之后，仍去还原会再次抢焦点。
                         if desktop.foreground(hwnd):
                             self.restore_win_state(snap)
+                    except Exception:
+                        pass
+                if shown:
+                    try:
+                        self.apply_window_position(hwnd)
                     except Exception:
                         pass
 

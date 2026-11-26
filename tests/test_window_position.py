@@ -180,6 +180,47 @@ class ApplyWindowPosition(unittest.TestCase):
         self.assertEqual(len(fake.placed), placed_once, '已经在屏幕外就别再挪了')
 
 
+class ShowWindowForForeground(unittest.TestCase):
+    """抢前台的路径（录音、表情包）之前必须把窗口挪回屏幕内。
+
+    窗口在屏幕外时它照样能被抢到前台，但用户看不见它 —— 敲的字会掉进
+    微信输入框。所以这类操作前要先挪回来，发完再挪回去。
+    """
+
+    def tearDown(self):
+        try:
+            os.remove(os.path.join(tempfile.gettempdir(), 'whale-window-test.json'))
+        except OSError:
+            pass
+
+    def _offscreen_env(self):
+        env, fake = build_env(pref='offscreen')
+        try:
+            os.remove(os.path.join(tempfile.gettempdir(), 'whale-window-test.json'))
+        except OSError:
+            pass
+        env['apply_window_position'](4242)      # 先挪到屏幕外
+        env['show_window_for_foreground'] = load_function('show_window_for_foreground', env)
+        return env, fake
+
+    def test_brings_window_back_onscreen(self):
+        env, fake = self._offscreen_env()
+        self.assertLess(fake.rect[2], 0)
+        self.assertTrue(env['show_window_for_foreground'](4242))
+        self.assertEqual(fake.rect, (100, 80, 900, 700))
+
+    def test_noop_when_window_is_already_onscreen(self):
+        env, fake = build_env(pref='offscreen')
+        env['show_window_for_foreground'] = load_function('show_window_for_foreground', env)
+        self.assertFalse(env['show_window_for_foreground'](4242))
+        self.assertEqual(fake.rect, (100, 80, 900, 700))
+
+    def test_noop_when_pref_is_normal(self):
+        env, fake = build_env(pref='normal')
+        env['show_window_for_foreground'] = load_function('show_window_for_foreground', env)
+        self.assertFalse(env['show_window_for_foreground'](4242))
+
+
 class BgSendConfig(unittest.TestCase):
     def test_parse_bg_send_reads_window_position(self):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'bridge'))
