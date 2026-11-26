@@ -337,6 +337,8 @@ const DEFAULT_CONFIG = {
       unhideWindow: true,
       // 微信窗口摆哪：normal = 跟着用户；offscreen = 整个挪到可见区域外
       windowPosition: 'normal',
+      // 打字通道：auto = 优先 UIA SetValue；wmchar = 优先 WM_CHAR（不抢前台）
+      typingMode: 'auto',
       // WM_CHAR 编码：auto = 按微信版本自动（4.2+ 用 UTF-16 码元，老版本用 GBK 字节）
       charMode: 'auto',
     },

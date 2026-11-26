@@ -80,6 +80,10 @@ def parse_bg_send(wechat_cfg):
                            else "normal"),
         # WM_CHAR 的编码语义：auto = 按微信版本自动（4.2+ 用 UTF-16 码元）
         "charMode": str(raw.get("charMode") or "auto").lower(),
+        # 打字通道：auto = 优先 UIA SetValue（稳）；wmchar = 优先 WM_CHAR（不抢前台）
+        "typingMode": ("wmchar"
+                       if str(raw.get("typingMode") or "auto").strip().lower() == "wmchar"
+                       else "auto"),
         # 后台通道的固定等待（秒）：缺省用 bg_sender.TIMING 的线上实测值，
         # 这里只透传用户覆盖的那部分，让「想快一点」不用改代码。
         "timing": raw.get("timing") if isinstance(raw.get("timing"), dict) else {},

@@ -179,6 +179,8 @@ const FIELDS = {
   // 微信窗口摆哪：normal = 跟着用户；offscreen = 整个挪到可见区域外，
   // 后台回复时它就不会再冒到屏幕上（窗口仍 visible，通道照样能点）。
   'wechat.bgSend.windowPosition': { type: 'enum', values: ['normal', 'offscreen'] },
+  // 打字通道：auto = 优先 UIA SetValue（稳）；wmchar = 优先 WM_CHAR（不抢前台）
+  'wechat.bgSend.typingMode': { type: 'enum', values: ['auto', 'wmchar'] },
   'wechat.pipelineWorkers': { type: 'int', min: 1, max: 16 },
   'wechat.pipelineQueueLimit': { type: 'int', min: 1, max: 32 },
 };

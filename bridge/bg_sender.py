@@ -1025,8 +1025,15 @@ def _uia_write(edit, text):
 
 
 def _type_text(sender, edit, text, *, mode, char_gap=0.04,
-               strip_unencodable=True, log=None):
-    """写正文：优先 UIA SetValue，失败才回退 WM_CHAR。返回 (ok, skipped)。"""
+               strip_unencodable=True, log=None, prefer_wmchar=False):
+    """写正文。返回 (ok, skipped)。
+
+    默认（prefer_wmchar=False）优先 UIA SetValue：稳，不会丢字。
+    prefer_wmchar=True 时优先 WM_CHAR 逐字投递：**不会抢前台**——
+    SetValue 会让控件抢焦点，连带把微信窗口激活成前台窗口（实测会把前台从别的程序
+    换到微信），而 WM_CHAR 只是往窗口投递消息，不动焦点。代价是逐字投递在多气泡
+    连发时更容易丢字（回读失败会判 input_dirty，发送被拒，不会发出错内容）。
+    """
     log = log or _noop
     expected = _expected_text(text, mode, strip_unencodable)
     if expected is None:
@@ -1034,6 +1041,13 @@ def _type_text(sender, edit, text, *, mode, char_gap=0.04,
     skipped = []
     if mode != "utf16":
         _payload, skipped = encode_gbk(text, strip_unencodable)
+    if prefer_wmchar:
+        ok, skipped = sender.type_text(text, char_gap=char_gap,
+                                       strip_unencodable=strip_unencodable, mode=mode)
+        if ok:
+            log("后台通道：打字通道 = WM_CHAR（不抢前台）")
+            return True, skipped
+        log("后台通道：WM_CHAR 不可用，回退 UIA SetValue")
     if _uia_write(edit, expected):
         try:
             hwnd = int(getattr(sender, "hwnd", 0) or 0)
@@ -1452,7 +1466,7 @@ _MODE_LOGGED = set()
 
 def _send_once(text, chat=None, hwnd=0, log=None, char_gap=0.04,
          strip_unencodable=True, verify=True, unhide=True, char_mode="auto",
-         *, allow_legacy_invoke=True):
+         *, allow_legacy_invoke=True, typing_mode="auto"):
     """一步发完：物化 → 切会话 → 伪焦点打字 → 点发送 → 回读确认。
 
     返回 `(ok, reason)`。`reason` 是稳定枚举：
@@ -1593,7 +1607,8 @@ def _send_once(text, chat=None, hwnd=0, log=None, char_gap=0.04,
                 operation.record('input_started', 'background_input')
                 ok, skipped = _type_text(sender, current.get("edit"), text,
                                          mode=mode, char_gap=char_gap,
-                                         strip_unencodable=strip_unencodable, log=log)
+                                         strip_unencodable=strip_unencodable, log=log,
+                                         prefer_wmchar=(str(typing_mode or "auto").strip().lower() == "wmchar"))
                 if not ok:
                     sender.end_input()
                     return False, "input_dirty"
@@ -1703,7 +1718,7 @@ def _send_once(text, chat=None, hwnd=0, log=None, char_gap=0.04,
 
 def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
          strip_unencodable=True, verify=True, unhide=True, char_mode="auto",
-         *, allow_legacy_invoke=True):
+         *, allow_legacy_invoke=True, typing_mode="auto"):
     """Compatible tuple entry; share the caller's logical preparation budget."""
     try:
         from send_attempt import logical_operation, SendPreparationStopped
@@ -1714,7 +1729,7 @@ def send(text, chat=None, hwnd=0, log=None, char_gap=0.04,
             return False, 'error:SendPreparationStopped'
         try:
             outcome = _send_once(text, chat, hwnd, log, char_gap, strip_unencodable, verify, unhide, char_mode,
-                                 allow_legacy_invoke=allow_legacy_invoke)
+                                 allow_legacy_invoke=allow_legacy_invoke, typing_mode=typing_mode)
         except SendPreparationStopped:
             return False, 'error:SendPreparationStopped'
         ok, reason = outcome

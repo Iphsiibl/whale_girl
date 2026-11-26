@@ -66,14 +66,20 @@ class WindowMixin:
         except Exception:
             return False
 
-    def _move_window(self, hwnd, x, y, w, h):
-        """挪窗口，但不激活它（SWP_NOACTIVATE），也不抢前台。"""
+    def _move_window(self, hwnd, x, y, w, h, restore=False):
+        """挪窗口，但不激活它（SWP_NOACTIVATE），也不抢前台。
+
+        `restore=True` 时把最小化的窗口展开到新位置；展开本身可能抢一次前台
+        （Windows 对最小化窗口的恢复就是这样），所以只在这条路径上发生一次。
+        """
         try:
             import win32con
             import win32gui
-            placement = list(win32gui.GetWindowPlacement(hwnd))
-            placement[4] = (int(x), int(y), int(x + w), int(y + h))
-            win32gui.SetWindowPlacement(hwnd, placement)
+            flags, show, pt_min, pt_max, _rect = win32gui.GetWindowPlacement(hwnd)
+            if restore:
+                show = win32con.SW_SHOWNOACTIVATE
+            win32gui.SetWindowPlacement(hwnd, (flags, show, pt_min, pt_max,
+                                              (int(x), int(y), int(x + w), int(y + h))))
             if not win32gui.IsIconic(hwnd):
                 win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, int(x), int(y), int(w), int(h),
                                       win32con.SWP_NOACTIVATE)
@@ -87,14 +93,17 @@ class WindowMixin:
 
         为什么需要：后台通道点会话行/点发送按钮靠的是发给窗口的合成鼠标消息，
         而微信最小化时**任何写操作都不生效**（合成鼠标消息不生效、Invoke 也不生效，
-        实测过），所以通道只能先把窗口恢复出来 —— 于是它会在你屏幕上冒 3~4 秒。
-        把窗口一直摆在可见区域外，这条路就完全没有动静：窗口仍然 visible 且不
-        minimized，通道照样能点。
+        实测过），所以通道每次发送都要先把窗口恢复出来 —— 于是它会在你屏幕上
+        冒 3~4 秒，还可能抢一次前台。
+
+        「屏幕外」模式把窗口停在**可见区域之外但保持展开**：这样通道不用每次都
+        把它恢复出来（也就不会反复抢前台），窗口也从不出现在你屏幕上。
 
         摆到屏幕外时把原来的位置记下来，改回 normal 再挪回去。
         """
         pref = self.window_position_pref()
         try:
+            import win32con
             import win32gui
         except Exception:
             return False
@@ -104,27 +113,29 @@ class WindowMixin:
         state = self._read_window_state()
         try:
             if pref == 'offscreen':
-                if self._window_is_offscreen(hwnd):
-                    return True
-                restore = self._window_normal_rect(hwnd)
-                if not restore:
+                normal = self._window_normal_rect(hwnd)
+                if not normal:
                     return False
-                x, y, w, h = restore
-                if not self._move_window(hwnd, -w - self.OFFSCREEN_GAP, y, w, h):
+                x, y, w, h = normal
+                # 已经在屏幕外、并且不是最小化状态：什么都不用做。
+                if not win32gui.IsIconic(hwnd) and self._window_is_offscreen(hwnd):
+                    return True
+                if not self._window_is_offscreen(hwnd):
+                    state['restore'] = [int(v) for v in normal]
+                if not self._move_window(hwnd, -w - self.OFFSCREEN_GAP, y, w, h, restore=True):
                     return False
                 state['position'] = 'offscreen'
-                state['restore'] = [int(v) for v in restore]
                 self._write_window_state(state)
                 G.log('微信窗口已挪到可见区域外（后台回复不再占用屏幕）')
                 return True
-            if not self._window_is_offscreen(hwnd):
+            if not win32gui.IsIconic(hwnd) and not self._window_is_offscreen(hwnd):
                 return True
             restore = state.get('restore') or []
             if len(restore) == 4:
                 x, y, w, h = [int(v) for v in restore]
             else:
                 x, y, w, h = 60, 60, 1000, 700
-            if not self._move_window(hwnd, x, y, w, h):
+            if not self._move_window(hwnd, x, y, w, h, restore=True):
                 return False
             state['position'] = 'normal'
             self._write_window_state(state)
@@ -528,9 +539,15 @@ class WindowMixin:
             import win32gui
             import win32con
             wx = snap.get('hwnd')
+            # 「屏幕外」模式下保持窗口展开（只是摆在可见区域之外）：通道每次发送
+            # 都要把最小化的窗口恢复出来，恢复会抢一次前台。留在展开状态就不用
+            # 反复恢复，窗口也从不出现在屏幕上。
             if wx and snap.get('iconic') and win32gui.IsWindow(wx):
-                win32gui.ShowWindow(wx, win32con.SW_MINIMIZE)
-                G.time.sleep(0.12)
+                if self.window_position_pref() == 'offscreen':
+                    pass
+                else:
+                    win32gui.ShowWindow(wx, win32con.SW_MINIMIZE)
+                    G.time.sleep(0.12)
         except Exception:
             pass
         try:

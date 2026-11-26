@@ -85,6 +85,7 @@ def install_fake_win32(fake):
     for name in ('MonitorFromPoint', 'GetSystemMetrics'):
         setattr(api, name, getattr(fake, name))
     con.SW_MINIMIZE, con.HWND_TOP, con.SWP_NOACTIVATE = 6, 0, 0x0010
+    con.SW_SHOWNOACTIVATE = 4
     con.SM_XVIRTUALSCREEN, con.SM_YVIRTUALSCREEN = 76, 77
     con.SM_CXVIRTUALSCREEN, con.SM_CYVIRTUALSCREEN = 78, 79
     sys.modules['win32gui'], sys.modules['win32con'], sys.modules['win32api'] = gui, con, api

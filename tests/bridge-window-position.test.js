@@ -78,3 +78,12 @@ test('激活微信窗口时前台锁拒绝后要有兜底（否则表情包/语�
   assert.match(act, /SwitchToThisWindow/, 'SetForegroundWindow 被前台锁拒绝时没有兜底，激活会失败');
   assert.doesNotMatch(act, /keybd_event/, '兜底不该用 ALT 解锁，那会往用户正在用的程序里塞真实按键');
 });
+
+test('打字通道可以走 WM_CHAR（不抢前台）', () => {
+  const bg = fs.readFileSync(path.join(root, 'bridge', 'bg_sender.py'), 'utf8');
+  assert.match(bg, /prefer_wmchar/, '没有「WM_CHAR 优先」的开关');
+  assert.match(bg, /typing_mode/, 'send() 没有把打字通道开关透传下去');
+  const schema = fs.readFileSync(path.join(root, 'src', 'infra', 'configSchema.js'), 'utf8');
+  assert.match(schema, /'wechat\.bgSend\.typingMode'\s*:\s*\{\s*type:\s*'enum',\s*values:\s*\['auto',\s*'wmchar'\]\s*}/,
+    'configSchema 里没有这个枚举，配置补丁会被当成未知字段丢掉');
+});

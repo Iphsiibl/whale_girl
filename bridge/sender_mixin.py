@@ -73,7 +73,8 @@ class SenderMixin:
                                      strip_unencodable=G.BG_SEND.get('strip', True),
                                      verify=G.BG_SEND.get('verify', True), unhide=G.BG_SEND.get('unhide', True),
                                      char_mode=G.BG_SEND.get('charMode') or 'auto',
-                                     allow_legacy_invoke=not allow_foreground)
+                                     allow_legacy_invoke=not allow_foreground,
+                                     typing_mode=G.BG_SEND.get('typingMode') or 'auto')
         except Exception as e:
             ok, why = (False, 'exception:' + type(e).__name__)
             G.log_warn('后台通道异常：', repr(e))
