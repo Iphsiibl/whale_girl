@@ -41,12 +41,28 @@ def _send_slot(lock, check):
     finally:
         lock.release()
 
-REQUEST = re.compile(r"(?:发|来|说|讲|回复)(?:给我|个|一条|一句|句|段|一段|条|一下|点|一段话|个回复|次|一)?\s*语音|用语音(?:回|说|讲)|语音(?:回我|回复|说一句)")
-NEGATIVE = re.compile(r"不要|别(?:再)?|不想|不用|不能|怎么|如何|他说|她说|有人说|关闭|取消|[\"“”‘’]")
+REQUEST = re.compile(
+    r"(?:发|来|说|讲|回复)(?:给我|个|一条|一句|句|段|一段|条|一下|点|一段话|个回复|次|一)?\s*语音"
+    r"|用语音(?:回|说|讲|唱|念|读|报|播|聊|发|来|整)"
+    r"|语音(?:回我|回复|说一句|来一条|整一段|版|给我)")
+NEGATIVE = re.compile(r"不要|别(?:再)?|不想|不用|不能|怎么|如何|他说|她说|有人说|听说|别人说|关闭|取消|[\"“”‘’]")
+# 台词里带引号/「别」时，不该把整条判成「不是明确要求」：
+# 「你用语音说："唱首歌"」里的引号和「别」是台词内容，不是指令。
+_QUOTED = re.compile(r"[\"“][^\"“”]*[\"”]|[‘][^‘’]*[’]|《[^》]*》")
 
 def requested(text):
+    """用户这句话是不是「明确在要语音」。
+
+    先剥掉引号/书名号里的台词，只看指令部分；否则台词里的引号、「别」会被
+    NEGATIVE 判成「不是明确要求」，只能掉进概率骰子。
+    """
     text = str(text or "")
-    return len(text) <= 500 and not NEGATIVE.search(text) and bool(REQUEST.search(text))
+    if len(text) > 500:
+        return False
+    core = _QUOTED.sub(' ', text)
+    if NEGATIVE.search(core):
+        return False
+    return bool(REQUEST.search(core))
 
 def settings(root):
     try:
