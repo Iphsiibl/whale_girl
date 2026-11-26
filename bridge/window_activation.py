@@ -21,7 +21,15 @@ def activate(hwnd):
     try:
         win32gui.SetForegroundWindow(hwnd)
     except Exception:
-        return False
+        pass
+    if win32gui.GetForegroundWindow() == hwnd:
+        return True
+    # 前台锁拒绝了 SetForegroundWindow：SwitchToThisWindow 能绕过它，而且不像
+    # 「ALT 解锁」那样往用户正在用的程序里塞一个真实的 Alt 按键。
+    try:
+        user32.SwitchToThisWindow(ctypes.c_void_p(int(hwnd)), True)
+    except Exception:
+        pass
     return win32gui.GetForegroundWindow() == hwnd
 
 

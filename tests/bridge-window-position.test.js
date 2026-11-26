@@ -72,3 +72,9 @@ test('按钮文案要能看出当前状态（点了是拉回，还是挪出去�
   assert.match(bridgeCode, /把微信窗口挪到屏幕外/, '没写「挪到屏幕外」的文案');
   assert.match(bridgeCode, /把微信窗口拉回屏幕/, '没写「拉回屏幕」的文案');
 });
+
+test('激活微信窗口时前台锁拒绝后要有兜底（否则表情包/语音永远发不出去）', () => {
+  const act = fs.readFileSync(path.join(root, 'bridge', 'window_activation.py'), 'utf8');
+  assert.match(act, /SwitchToThisWindow/, 'SetForegroundWindow 被前台锁拒绝时没有兜底，激活会失败');
+  assert.doesNotMatch(act, /keybd_event/, '兜底不该用 ALT 解锁，那会往用户正在用的程序里塞真实按键');
+});
